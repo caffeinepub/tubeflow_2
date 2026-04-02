@@ -1,0 +1,224 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@font-face {
+  font-family: "Satoshi";
+  src: url("/assets/fonts/Satoshi.woff2") format("woff2");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@layer base {
+  :root {
+    --radius: 0.75rem;
+    --background: 0.1 0.005 260;
+    --foreground: 0.95 0.004 250;
+    --card: 0.14 0.005 260;
+    --card-foreground: 0.95 0.004 250;
+    --popover: 0.16 0.005 260;
+    --popover-foreground: 0.95 0.004 250;
+    --primary: 0.95 0.004 250;
+    --primary-foreground: 0.1 0.005 260;
+    --secondary: 0.19 0.005 260;
+    --secondary-foreground: 0.95 0.004 250;
+    --muted: 0.19 0.005 260;
+    --muted-foreground: 0.6 0.009 240;
+    --accent: 0.72 0.172 162;
+    --accent-foreground: 0.1 0.005 260;
+    --destructive: 0.62 0.22 25;
+    --destructive-foreground: 0.95 0.004 250;
+    --border: 0.2 0.005 260;
+    --input: 0.19 0.005 260;
+    --ring: 0.72 0.172 162;
+    --chart-1: 0.72 0.172 162;
+    --chart-2: 0.6 0.18 260;
+    --chart-3: 0.65 0.22 25;
+    --chart-4: 0.7 0.15 45;
+    --chart-5: 0.68 0.18 300;
+    --sidebar: 0.14 0.005 260;
+    --sidebar-foreground: 0.95 0.004 250;
+    --sidebar-primary: 0.72 0.172 162;
+    --sidebar-primary-foreground: 0.1 0.005 260;
+    --sidebar-accent: 0.17 0.005 260;
+    --sidebar-accent-foreground: 0.95 0.004 250;
+    --sidebar-border: 0.2 0.005 260;
+    --sidebar-ring: 0.72 0.172 162;
+    --tube-accent: #19c37d;
+  }
+  * {
+    @apply border-border;
+  }
+  html,
+  body {
+    @apply bg-background text-foreground;
+    font-family: "Satoshi", "Inter", system-ui, sans-serif;
+    height: 100%;
+    overflow: hidden;
+  }
+  #root {
+    height: 100%;
+    overflow: hidden;
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+  }
+  ::-webkit-scrollbar {
+    width: 3px;
+    height: 3px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: oklch(0.28 0.005 260);
+    border-radius: 2px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.36 0.005 260);
+  }
+}
+
+/* Mobile container */
+.mobile-shell {
+  width: 100%;
+  max-width: 430px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  background: oklch(0.1 0.005 260);
+  box-shadow: 0 0 80px oklch(0 0 0 / 0.6);
+}
+
+/* Page transitions */
+.page-enter {
+  animation: pageSlideIn 0.22s ease-out both;
+}
+@keyframes pageSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Expanded player slide-up */
+.tube-expanded-enter {
+  animation: expandedSlideUp 0.32s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.tube-expanded-exit {
+  animation: expandedSlideDown 0.28s cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+@keyframes expandedSlideUp {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes expandedSlideDown {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+
+/* Speed pill scroll */
+.speed-scroll {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+.speed-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* Progress bar thumb */
+.progress-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+}
+.progress-thumb::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--tube-accent);
+  cursor: pointer;
+}
+
+/* Bottom nav safe area */
+.bottom-nav {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Glass card */
+.glass-card {
+  background: oklch(0.16 0.005 260 / 0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid oklch(0.22 0.005 260 / 0.6);
+}
+
+/* Study timer badge */
+.study-timer-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--tube-accent);
+  color: oklch(0.1 0.005 260);
+  font-size: 10px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+}
+
+/* Audio wave animation */
+.audio-wave {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 28px;
+}
+
+.audio-bar {
+  display: block;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--tube-accent);
+  animation: audioWave 0.8s ease-in-out infinite alternate;
+  min-height: 4px;
+}
+
+@keyframes audioWave {
+  0% {
+    height: 4px;
+    opacity: 0.5;
+  }
+  100% {
+    height: 24px;
+    opacity: 1;
+  }
+}
