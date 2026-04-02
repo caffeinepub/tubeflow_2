@@ -1,11 +1,5 @@
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  AlertCircle,
-  GraduationCap,
-  RefreshCw,
-  TrendingUp,
-} from "lucide-react";
+import { RefreshCw, TrendingUp } from "lucide-react";
 import { useEffect, useState } from "react";
 import { VideoCard } from "../components/VideoCard";
 import { useApp } from "../context/AppContext";
@@ -25,60 +19,20 @@ const CATEGORIES = [
   { label: "Science", id: "Science" },
 ];
 
-const STUDY_TOPICS = [
-  { label: "\u{1F4D0} Math", query: "mathematics tutorial lecture" },
-  { label: "\u269B\uFE0F Physics", query: "physics tutorial lecture" },
-  { label: "\u{1F9EA} Chemistry", query: "chemistry tutorial lecture" },
-  { label: "\u{1F9EC} Biology", query: "biology tutorial lecture" },
-  { label: "\u{1F4BB} Coding", query: "programming tutorial for beginners" },
-  { label: "\u{1F30D} Geography", query: "geography lesson tutorial" },
-  { label: "\u{1F4D6} History", query: "history lesson documentary" },
-  { label: "\u{1F4DD} English", query: "english grammar lesson tutorial" },
-  { label: "\u{1F4CA} Economics", query: "economics tutorial lecture" },
-  { label: "\u{1F3B5} Music", query: "music theory tutorial" },
-  { label: "\u{1F3A8} Art", query: "art tutorial drawing painting" },
-  { label: "\u{1F9E0} Psychology", query: "psychology lecture tutorial" },
-];
-
 export function HomePage() {
-  const { setPage, setSearchQuery } = useApp();
+  const { setPage: _setPage } = useApp();
   const [videos, setVideos] = useState<YouTubeVideoItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [category, setCategory] = useState("");
   const [retryCount, setRetryCount] = useState(0);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: retryCount is an intentional re-fetch trigger
   useEffect(() => {
     setLoading(true);
-    setError(null);
     invidiousTrending(category || undefined)
       .then(setVideos)
-      .catch(() => setError("Failed to fetch trending. Check your connection."))
       .finally(() => setLoading(false));
   }, [category, retryCount]);
-
-  if (error) {
-    return (
-      <div
-        className="flex flex-col items-center justify-center h-full gap-3 px-6"
-        data-ocid="home.error_state"
-      >
-        <AlertCircle className="w-10 h-10 text-destructive" />
-        <p className="text-foreground font-medium text-center text-sm">
-          {error}
-        </p>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={() => setRetryCount((c) => c + 1)}
-          data-ocid="home.retry.button"
-        >
-          <RefreshCw className="w-3.5 h-3.5 mr-1" /> Retry
-        </Button>
-      </div>
-    );
-  }
 
   return (
     <div className="pb-4" data-ocid="home.section">
@@ -108,47 +62,25 @@ export function HomePage() {
         ))}
       </div>
 
-      {/* Study Topics section */}
-      <div className="px-4 mb-4">
-        <div className="flex items-center gap-2 mb-2">
-          <GraduationCap
+      {/* Title row */}
+      <div className="flex items-center justify-between px-4 mb-3">
+        <div className="flex items-center gap-2">
+          <TrendingUp
             className="w-4 h-4"
             style={{ color: "var(--tube-accent)" }}
           />
-          <h2 className="text-sm font-bold text-foreground">Study Topics</h2>
+          <h2 className="text-sm font-bold text-foreground">Trending Now</h2>
         </div>
-        <div
-          className="flex items-center gap-2 overflow-x-auto pb-1"
-          style={{ scrollbarWidth: "none" }}
+        <button
+          type="button"
+          onClick={() => setRetryCount((c) => c + 1)}
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          disabled={loading}
         >
-          {STUDY_TOPICS.map((topic) => (
-            <button
-              key={topic.query}
-              type="button"
-              data-ocid="home.study.tab"
-              onClick={() => {
-                setSearchQuery(topic.query);
-                setPage("search");
-              }}
-              className="flex-shrink-0 px-4 py-1.5 rounded-full text-xs font-semibold transition-all hover:opacity-90"
-              style={{
-                background: "oklch(0.16 0.008 280)",
-                color: "oklch(0.75 0.012 280)",
-              }}
-            >
-              {topic.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Title row */}
-      <div className="flex items-center gap-2 px-4 mb-3">
-        <TrendingUp
-          className="w-4 h-4"
-          style={{ color: "var(--tube-accent)" }}
-        />
-        <h2 className="text-sm font-bold text-foreground">Trending Now</h2>
+          <RefreshCw
+            className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`}
+          />
+        </button>
       </div>
 
       {loading ? (

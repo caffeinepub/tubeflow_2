@@ -9,8 +9,9 @@ import {
   Keyboard,
   Moon,
   Palette,
+  RefreshCw,
+  RotateCcw,
   Save,
-  Timer,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -65,6 +66,7 @@ export function SettingsPage() {
   } = useApp();
   const [localAccent, setLocalAccent] = useState(accentColor);
   const [localSpeed, setLocalSpeed] = useState(playbackSpeed);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const { data: pref } = usePreference();
   const { mutateAsync: savePreference, isPending } = useSavePreference();
@@ -90,6 +92,25 @@ export function SettingsPage() {
     } catch (_) {
       toast.error("Saved locally (backend error).");
     }
+  };
+
+  const handleRefresh = async () => {
+    // Save first, then reload so all changes apply immediately
+    setIsRefreshing(true);
+    setAccentColor(localAccent);
+    setPlaybackSpeed(localSpeed);
+    setPreferencesLoaded(true);
+    try {
+      await savePreference({
+        accentColor: localAccent,
+        playbackSpeed: localSpeed,
+        exists: !!pref,
+      });
+    } catch (_) {
+      // ignore backend errors, still refresh
+    }
+    toast.success("Refreshing app...");
+    setTimeout(() => window.location.reload(), 600);
   };
 
   return (
@@ -330,21 +351,43 @@ export function SettingsPage() {
           </div>
         </section>
 
-        <Button
-          data-ocid="settings.save.submit_button"
-          onClick={handleSave}
-          disabled={isPending}
-          className="w-full text-black font-bold py-3 rounded-2xl"
-          style={{ background: "var(--tube-accent)" }}
-        >
-          {isPending ? (
-            "Saving..."
-          ) : (
-            <>
-              <Save className="w-4 h-4 mr-2" /> Save Settings
-            </>
-          )}
-        </Button>
+        {/* Action buttons */}
+        <div className="flex flex-col gap-3">
+          <Button
+            data-ocid="settings.save.submit_button"
+            onClick={handleSave}
+            disabled={isPending || isRefreshing}
+            className="w-full text-black font-bold py-3 rounded-2xl"
+            style={{ background: "var(--tube-accent)" }}
+          >
+            {isPending ? (
+              "Saving..."
+            ) : (
+              <>
+                <Save className="w-4 h-4 mr-2" /> Save Settings
+              </>
+            )}
+          </Button>
+
+          <Button
+            data-ocid="settings.refresh.button"
+            onClick={handleRefresh}
+            disabled={isPending || isRefreshing}
+            variant="secondary"
+            className="w-full font-bold py-3 rounded-2xl"
+          >
+            {isRefreshing ? (
+              <>
+                <RefreshCw className="w-4 h-4 mr-2 animate-spin" />{" "}
+                Refreshing...
+              </>
+            ) : (
+              <>
+                <RotateCcw className="w-4 h-4 mr-2" /> Save &amp; Refresh App
+              </>
+            )}
+          </Button>
+        </div>
 
         {/* Footer */}
         <p className="text-center text-xs text-muted-foreground pb-2">

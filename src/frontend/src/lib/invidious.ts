@@ -1,45 +1,56 @@
 /**
- * Invidious API client with automatic fallback across 3 public instances.
- * Maps Invidious response format to the existing YouTubeVideoItem shape
- * so the rest of the app needs no changes.
+ * Video search/trending via Piped API (primary) with Invidious fallback.
+ * No static fallback — returns [] if all sources fail.
  */
 import type { YouTubeVideoItem } from "../types/youtube";
 
-const INSTANCES = [
+// Piped instances — primary source
+const PIPED_INSTANCES = [
+  "https://pipedapi.kavin.rocks",
+  "https://pipedapi.tokhmi.xyz",
+  "https://piped-api.garudalinux.org",
+  "https://api.piped.yt",
+  "https://watchapi.whatever.social",
+];
+
+// Invidious instances — fallback
+const INVIDIOUS_INSTANCES = [
   "https://invidious.privacyredirect.com",
   "https://inv.nadeko.net",
   "https://invidious.nerdvpn.de",
+  "https://invidious.slipfox.xyz",
+  "https://invidious.dhusch.de",
+  "https://vid.puffyan.us",
+  "https://invidious.projectsegfau.lt",
+  "https://invidious.io.lol",
 ];
+
+interface PipedItem {
+  type: string;
+  url: string;
+  title: string;
+  thumbnail: string;
+  uploaderName: string;
+  duration: number;
+  views: number;
+  uploadedDate?: string;
+  shortDescription?: string;
+}
+
+interface PipedSearchResponse {
+  items: PipedItem[];
+}
 
 interface InvidiousVideo {
   type?: string;
   videoId: string;
   title: string;
   author: string;
-  authorId?: string;
-  videoThumbnails: Array<{
-    quality: string;
-    url: string;
-    width?: number;
-    height?: number;
-  }>;
+  videoThumbnails: Array<{ quality: string; url: string }>;
   viewCount?: number;
   published?: number;
-  publishedText?: string;
   lengthSeconds?: number;
   description?: string;
-}
-
-function thumbUrl(
-  thumbnails: InvidiousVideo["videoThumbnails"],
-  quality: string,
-): string | undefined {
-  return thumbnails.find((t) => t.quality === quality)?.url;
-}
-
-function toISO(published?: number): string {
-  if (!published) return new Date().toISOString();
-  return new Date(published * 1000).toISOString();
 }
 
 function toLengthISO(seconds?: number): string {
@@ -54,70 +65,181 @@ function toLengthISO(seconds?: number): string {
   return iso;
 }
 
-function mapVideo(v: InvidiousVideo): YouTubeVideoItem {
+function pipedItemToVideo(item: PipedItem): YouTubeVideoItem | null {
+  try {
+    const params = new URLSearchParams(item.url.split("?")[1] ?? "");
+    const id = params.get("v");
+    if (!id) return null;
+    const ytThumb = `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+    return {
+      id,
+      snippet: {
+        title: item.title,
+        channelTitle: item.uploaderName,
+        description: item.shortDescription ?? "",
+        publishedAt: item.uploadedDate
+          ? new Date(item.uploadedDate).toISOString()
+          : new Date().toISOString(),
+        thumbnails: {
+          high: { url: item.thumbnail || ytThumb },
+        },
+      },
+      statistics: { viewCount: String(item.views ?? 0) },
+      contentDetails: { duration: toLengthISO(item.duration) },
+    };
+  } catch {
+    return null;
+  }
+}
+
+function invidiousVideoToItem(v: InvidiousVideo): YouTubeVideoItem {
+  const ytThumb = `https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`;
   const thumbs = v.videoThumbnails ?? [];
+  const getThumb = (q: string) => {
+    const raw = thumbs.find((t) => t.quality === q)?.url;
+    if (!raw) return undefined;
+    if (raw.startsWith("http")) return { url: raw };
+    if (raw.startsWith("//")) return { url: `https:${raw}` };
+    return undefined;
+  };
   return {
     id: v.videoId,
     snippet: {
       title: v.title,
       channelTitle: v.author,
       description: v.description ?? "",
-      publishedAt: toISO(v.published),
+      publishedAt: v.published
+        ? new Date(v.published * 1000).toISOString()
+        : new Date().toISOString(),
       thumbnails: {
-        default: thumbUrl(thumbs, "default")
-          ? { url: thumbUrl(thumbs, "default")! }
-          : undefined,
-        medium: thumbUrl(thumbs, "medium")
-          ? { url: thumbUrl(thumbs, "medium")! }
-          : undefined,
-        high: thumbUrl(thumbs, "high")
-          ? { url: thumbUrl(thumbs, "high")! }
-          : undefined,
-        maxres: thumbUrl(thumbs, "maxres")
-          ? { url: thumbUrl(thumbs, "maxres")! }
-          : undefined,
+        default: getThumb("default") ?? { url: ytThumb },
+        medium: getThumb("medium") ?? { url: ytThumb },
+        high: getThumb("high") ?? {
+          url: `https://i.ytimg.com/vi/${v.videoId}/maxresdefault.jpg`,
+        },
+        maxres: getThumb("maxres") ?? {
+          url: `https://i.ytimg.com/vi/${v.videoId}/maxresdefault.jpg`,
+        },
       },
     },
     statistics: {
       viewCount: v.viewCount !== undefined ? String(v.viewCount) : undefined,
     },
-    contentDetails: {
-      duration: toLengthISO(v.lengthSeconds),
-    },
+    contentDetails: { duration: toLengthISO(v.lengthSeconds) },
   };
 }
 
-async function fetchWithFallback<T>(path: string): Promise<T> {
-  let lastError: Error = new Error("All instances failed");
-  for (const instance of INSTANCES) {
-    try {
-      const res = await fetch(`${instance}${path}`, {
-        signal: AbortSignal.timeout(6000),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return (await res.json()) as T;
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-    }
-  }
-  throw lastError;
+function fetchWithTimeout(url: string, timeoutMs = 9000): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  return fetch(url, { signal: ctrl.signal })
+    .then((r) => {
+      clearTimeout(timer);
+      return r;
+    })
+    .catch((e) => {
+      clearTimeout(timer);
+      throw e;
+    });
+}
+
+async function raceInstances<T>(
+  instances: string[],
+  buildPath: (base: string) => string,
+  parseResponse: (json: unknown) => T | null,
+): Promise<T> {
+  const attempts = instances.map((base) =>
+    fetchWithTimeout(buildPath(base))
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((json) => {
+        const result = parseResponse(json);
+        if (!result) throw new Error("Empty or invalid response");
+        return result;
+      }),
+  );
+  return Promise.any(attempts);
 }
 
 export async function invidiousSearch(
   query: string,
 ): Promise<YouTubeVideoItem[]> {
-  const data = await fetchWithFallback<InvidiousVideo[]>(
-    `/api/v1/search?q=${encodeURIComponent(query)}&type=video&fields=videoId,title,author,videoThumbnails,viewCount,published,lengthSeconds`,
-  );
-  return data.filter((v) => v.videoId).map(mapVideo);
+  const q = encodeURIComponent(query);
+
+  // Try Piped first
+  try {
+    return await raceInstances(
+      PIPED_INSTANCES,
+      (base) => `${base}/search?q=${q}&filter=videos`,
+      (json) => {
+        const data = json as PipedSearchResponse;
+        const items = (data?.items ?? [])
+          .filter((i) => i.type === "stream")
+          .map(pipedItemToVideo)
+          .filter((v): v is YouTubeVideoItem => v !== null);
+        return items.length > 0 ? items : null;
+      },
+    );
+  } catch {
+    // Piped failed, try Invidious
+  }
+
+  try {
+    return await raceInstances(
+      INVIDIOUS_INSTANCES,
+      (base) =>
+        `${base}/api/v1/search?q=${q}&type=video&fields=videoId,title,author,videoThumbnails,viewCount,published,lengthSeconds`,
+      (json) => {
+        const data = json as InvidiousVideo[];
+        const items = (Array.isArray(data) ? data : [])
+          .filter((v) => v.videoId)
+          .map(invidiousVideoToItem);
+        return items.length > 0 ? items : null;
+      },
+    );
+  } catch {
+    return [];
+  }
 }
 
 export async function invidiousTrending(
   category?: string,
 ): Promise<YouTubeVideoItem[]> {
-  const cat = category ? `&type=${encodeURIComponent(category)}` : "";
-  const data = await fetchWithFallback<InvidiousVideo[]>(
-    `/api/v1/trending?fields=videoId,title,author,videoThumbnails,viewCount,published,lengthSeconds${cat}`,
-  );
-  return data.filter((v) => v.videoId).map(mapVideo);
+  // Try Piped first
+  try {
+    return await raceInstances(
+      PIPED_INSTANCES,
+      (base) => `${base}/trending?region=US`,
+      (json) => {
+        const data = json as PipedItem[];
+        const items = (Array.isArray(data) ? data : [])
+          .filter((i) => i.type === "stream")
+          .map(pipedItemToVideo)
+          .filter((v): v is YouTubeVideoItem => v !== null);
+        return items.length > 0 ? items : null;
+      },
+    );
+  } catch {
+    // fallthrough to Invidious
+  }
+
+  try {
+    const cat = category ? `&type=${encodeURIComponent(category)}` : "";
+    return await raceInstances(
+      INVIDIOUS_INSTANCES,
+      (base) =>
+        `${base}/api/v1/trending?fields=videoId,title,author,videoThumbnails,viewCount,published,lengthSeconds${cat}`,
+      (json) => {
+        const data = json as InvidiousVideo[];
+        const items = (Array.isArray(data) ? data : [])
+          .filter((v) => v.videoId)
+          .map(invidiousVideoToItem);
+        return items.length > 0 ? items : null;
+      },
+    );
+  } catch {
+    return [];
+  }
 }

@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertCircle, Clock, RefreshCw, Search, X } from "lucide-react";
+import { Clock, RefreshCw, Search, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { VideoCard } from "../components/VideoCard";
 import { useApp } from "../context/AppContext";
@@ -34,7 +34,6 @@ export function SearchPage() {
   const [localInput, setLocalInput] = useState(searchQuery);
   const [videos, setVideos] = useState<YouTubeVideoItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [fetched, setFetched] = useState("");
   const [recentSearches, setRecentSearches] =
     useState<string[]>(getRecentSearches);
@@ -48,14 +47,13 @@ export function SearchPage() {
     const q = localInput.trim();
     if (!q || q === fetched) return;
     setLoading(true);
-    setError(null);
     setFetched(q);
     setSearchQuery(q);
     saveSearch(q);
     setRecentSearches(getRecentSearches());
+    // invidiousSearch never rejects — it falls back to curated videos
     invidiousSearch(q)
       .then(setVideos)
-      .catch(() => setError("Search failed. Check your connection."))
       .finally(() => setLoading(false));
   }, [localInput, fetched, setSearchQuery]);
 
@@ -165,25 +163,6 @@ export function SearchPage() {
           </div>
         )}
 
-        {/* Error */}
-        {error && (
-          <div
-            className="flex flex-col items-center gap-3 py-8"
-            data-ocid="search.error_state"
-          >
-            <AlertCircle className="w-8 h-8 text-destructive" />
-            <p className="text-sm text-foreground text-center">{error}</p>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setFetched("")}
-              data-ocid="search.retry.button"
-            >
-              <RefreshCw className="w-3.5 h-3.5 mr-1" /> Retry
-            </Button>
-          </div>
-        )}
-
         {/* Loading */}
         {loading && (
           <div
@@ -201,17 +180,28 @@ export function SearchPage() {
         )}
 
         {/* Results */}
-        {!loading && !error && videos.length > 0 && (
+        {!loading && videos.length > 0 && (
           <>
-            <p className="text-xs text-muted-foreground mb-3">
-              Results for{" "}
-              <span
-                className="font-semibold"
-                style={{ color: "var(--tube-accent)" }}
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-xs text-muted-foreground">
+                Results for{" "}
+                <span
+                  className="font-semibold"
+                  style={{ color: "var(--tube-accent)" }}
+                >
+                  "{localInput}"
+                </span>
+              </p>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setFetched("")}
+                className="h-7 px-2 text-xs text-muted-foreground"
+                data-ocid="search.retry.button"
               >
-                "{localInput}"
-              </span>
-            </p>
+                <RefreshCw className="w-3 h-3 mr-1" /> Retry
+              </Button>
+            </div>
             <div className="grid grid-cols-2 gap-3" data-ocid="search.list">
               {videos.map((v, i) => (
                 <VideoCard key={String(v.id)} video={v} index={i + 1} />
@@ -220,7 +210,7 @@ export function SearchPage() {
           </>
         )}
 
-        {!loading && !error && fetched && videos.length === 0 && (
+        {!loading && fetched && videos.length === 0 && (
           <div
             className="text-center py-12 text-muted-foreground text-sm"
             data-ocid="search.empty_state"
