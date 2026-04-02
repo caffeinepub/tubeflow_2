@@ -8,18 +8,24 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
-import {
-  type Page,
-  type YTPlayer,
-  type YouTubeVideoItem,
-  getVideoId,
-} from "../types/youtube";
+import { fetchStreamUrl } from "../lib/invidious";
+import { type Page, type YouTubeVideoItem, getVideoId } from "../types/youtube";
 
 export interface Bookmark {
   id: string;
   videoId: string;
   time: number;
   label: string;
+}
+
+function loadResumeMap(): Record<string, number> {
+  try {
+    return JSON.parse(
+      localStorage.getItem("tubeflow_resume") ?? "{}",
+    ) as Record<string, number>;
+  } catch {
+    return {};
+  }
 }
 
 interface AppContextValue {
@@ -34,8 +40,10 @@ interface AppContextValue {
   // player
   currentVideo: YouTubeVideoItem | null;
   watchVideo: (v: YouTubeVideoItem) => void;
-  playerRef: React.MutableRefObject<YTPlayer | null>;
-  isYTReady: boolean;
+  audioRef: React.MutableRefObject<HTMLAudioElement | null>;
+  streamLoading: boolean;
+  streamError: boolean;
+  retryStream: () => void;
   isPlaying: boolean;
   setIsPlaying: (v: boolean) => void;
   playerExpanded: boolean;
@@ -82,6 +90,13 @@ interface AppContextValue {
   setStudyTimerDuration: (d: { study: number; breakTime: number }) => void;
   startStudyTimer: () => void;
   stopStudyTimer: () => void;
+  // auto resume
+  pendingResumeTime: React.MutableRefObject<number | null>;
+  saveResumeTimestamp: (videoId: string, time: number) => void;
+  getResumeTimestamp: (videoId: string) => number | null;
+  // auto fullscreen
+  autoFullscreen: boolean;
+  setAutoFullscreen: (v: boolean) => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -93,7 +108,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [currentVideo, setCurrentVideo] = useState<YouTubeVideoItem | null>(
     null,
   );
-  const [isYTReady, setIsYTReady] = useState(false);
+  const [streamLoading, setStreamLoading] = useState(false);
+  const [streamError, setStreamError] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playerExpanded, setPlayerExpanded] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -121,11 +137,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     study: 25,
     breakTime: 5,
   });
-  const playerRef = useRef<YTPlayer | null>(null);
+  const [autoFullscreen, setAutoFullscreenState] = useState(
+    () => localStorage.getItem("tubeflow_autoFullscreen") === "true",
+  );
+
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const sleepTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const studyTimerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
     null,
   );
+  const pendingResumeTime = useRef<number | null>(null);
+  const autoResumeMapRef = useRef<Record<string, number>>(loadResumeMap());
+  const currentVideoRef = useRef<YouTubeVideoItem | null>(null);
 
   const setAccentColor = useCallback((color: string) => {
     setAccentColorState(color);
@@ -134,39 +157,82 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const setPlaybackSpeed = useCallback((s: number) => {
     setPlaybackSpeedState(s);
-    try {
-      playerRef.current?.setPlaybackRate(s);
-    } catch (_) {}
+    if (audioRef.current) {
+      audioRef.current.playbackRate = s;
+    }
   }, []);
 
   const setVolume = useCallback((v: number) => {
     setVolumeState(v);
+    if (audioRef.current) {
+      audioRef.current.volume = v / 100;
+    }
+  }, []);
+
+  const setAutoFullscreen = useCallback((v: boolean) => {
+    setAutoFullscreenState(v);
+    localStorage.setItem("tubeflow_autoFullscreen", String(v));
+  }, []);
+
+  const saveResumeTimestamp = useCallback((videoId: string, time: number) => {
+    autoResumeMapRef.current = { ...autoResumeMapRef.current, [videoId]: time };
     try {
-      playerRef.current?.setVolume(v);
+      localStorage.setItem(
+        "tubeflow_resume",
+        JSON.stringify(autoResumeMapRef.current),
+      );
     } catch (_) {}
   }, []);
 
-  // YT IFrame API
-  useEffect(() => {
-    if (window.YT?.Player) {
-      setIsYTReady(true);
-      return;
-    }
-    if (
-      !document.querySelector(
-        'script[src="https://www.youtube.com/iframe_api"]',
-      )
-    ) {
-      const tag = document.createElement("script");
-      tag.src = "https://www.youtube.com/iframe_api";
-      document.head.appendChild(tag);
-    }
-    window.onYouTubeIframeAPIReady = () => setIsYTReady(true);
+  const getResumeTimestamp = useCallback((videoId: string): number | null => {
+    const t = autoResumeMapRef.current[videoId];
+    return t !== undefined ? t : null;
   }, []);
 
   useEffect(() => {
     document.documentElement.style.setProperty("--tube-accent", "#19C37D");
   }, []);
+
+  // Media Session API
+  // biome-ignore lint/correctness/useExhaustiveDependencies: isPlaying intentionally used
+  useEffect(() => {
+    if (!("mediaSession" in navigator) || !currentVideo) return;
+    const thumb =
+      currentVideo.snippet.thumbnails.high?.url ||
+      currentVideo.snippet.thumbnails.medium?.url ||
+      "";
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: currentVideo.snippet.title,
+      artist: currentVideo.snippet.channelTitle,
+      artwork: thumb
+        ? [{ src: thumb, sizes: "480x360", type: "image/jpeg" }]
+        : [],
+    });
+    navigator.mediaSession.setActionHandler("play", () => {
+      audioRef.current?.play().catch(() => {});
+      setIsPlaying(true);
+    });
+    navigator.mediaSession.setActionHandler("pause", () => {
+      audioRef.current?.pause();
+      setIsPlaying(false);
+    });
+    navigator.mediaSession.setActionHandler("seekforward", () => {
+      if (audioRef.current) {
+        audioRef.current.currentTime = Math.min(
+          audioRef.current.duration || 0,
+          audioRef.current.currentTime + 10,
+        );
+      }
+    });
+    navigator.mediaSession.setActionHandler("seekbackward", () => {
+      if (audioRef.current) {
+        audioRef.current.currentTime = Math.max(
+          0,
+          audioRef.current.currentTime - 10,
+        );
+      }
+    });
+  }, [currentVideo, isPlaying]);
 
   // Sleep timer
   const setSleepTimer = useCallback((minutes: number | null) => {
@@ -179,9 +245,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSleepTimerRemaining(minutes * 60);
     sleepTimerRef.current = setTimeout(
       () => {
-        try {
-          playerRef.current?.pauseVideo();
-        } catch (_) {}
+        audioRef.current?.pause();
         setSleepTimerState(null);
         setSleepTimerRemaining(null);
       },
@@ -190,7 +254,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Sleep timer countdown
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional - runs when timer is set
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentional
   useEffect(() => {
     if (sleepTimerRemaining === null) return;
     const id = setInterval(() => {
@@ -232,18 +296,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (prev <= 1) {
           setStudyTimerPhase((phase) => {
             if (phase === "study") {
-              try {
-                playerRef.current?.pauseVideo();
-              } catch (_) {}
+              audioRef.current?.pause();
               toast.success("Break time! 🎉 Take a 5-min breather.", {
                 duration: 5000,
               });
               setStudyTimerRemaining(studyTimerDuration.breakTime * 60);
               return "break";
             }
-            try {
-              playerRef.current?.playVideo();
-            } catch (_) {}
+            audioRef.current?.play().catch(() => {});
             toast.success("Back to focus! 📚", { duration: 3000 });
             setStudyTimerRemaining(studyTimerDuration.study * 60);
             return "study";
@@ -259,26 +319,64 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
   }, [studyTimerActive, studyTimerDuration]);
 
-  const watchVideo = useCallback((video: YouTubeVideoItem) => {
-    setCurrentVideo(video);
-    setPage("watch");
-    setPlayerExpanded(true);
-    setWatchHistory((prev) => {
-      const newHistory = [...prev, video];
-      setCurrentHistoryIndex(newHistory.length - 1);
-      return newHistory;
-    });
-  }, []);
+  const loadStream = useCallback(
+    async (video: YouTubeVideoItem) => {
+      const vid = getVideoId(video);
+      setStreamLoading(true);
+      setStreamError(false);
+      try {
+        const url = await fetchStreamUrl(vid);
+        if (audioRef.current) {
+          audioRef.current.src = url;
+          audioRef.current.playbackRate = playbackSpeed;
+          audioRef.current.volume = volume / 100;
+          audioRef.current.play().catch(() => {});
+        }
+        setStreamLoading(false);
+      } catch {
+        setStreamLoading(false);
+        setStreamError(true);
+      }
+    },
+    [playbackSpeed, volume],
+  );
+
+  const watchVideo = useCallback(
+    (video: YouTubeVideoItem) => {
+      const vid = getVideoId(video);
+      const resumeTime = autoResumeMapRef.current[vid] ?? null;
+      pendingResumeTime.current =
+        resumeTime && resumeTime > 5 ? resumeTime : null;
+
+      currentVideoRef.current = video;
+      setCurrentVideo(video);
+      setPage("watch");
+      setPlayerExpanded(true);
+      setWatchHistory((prev) => {
+        const newHistory = [...prev, video];
+        setCurrentHistoryIndex(newHistory.length - 1);
+        return newHistory;
+      });
+
+      loadStream(video);
+    },
+    [loadStream],
+  );
+
+  const retryStream = useCallback(() => {
+    if (currentVideoRef.current) {
+      loadStream(currentVideoRef.current);
+    }
+  }, [loadStream]);
 
   const playNext = useCallback(() => {
     setCurrentHistoryIndex((idx) => {
       if (idx < watchHistory.length - 1) {
         const next = watchHistory[idx + 1];
         if (next) {
+          currentVideoRef.current = next;
           setCurrentVideo(next);
-          try {
-            playerRef.current?.loadVideoById(getVideoId(next));
-          } catch (_) {}
+          loadStream(next);
         }
         return idx + 1;
       }
@@ -286,15 +384,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         if (q.length > 0) {
           const [next, ...rest] = q;
           if (next) {
+            currentVideoRef.current = next;
             setCurrentVideo(next);
             setWatchHistory((h) => {
               const n = [...h, next];
               setCurrentHistoryIndex(n.length - 1);
               return n;
             });
-            try {
-              playerRef.current?.loadVideoById(getVideoId(next));
-            } catch (_) {}
+            loadStream(next);
           }
           return rest;
         }
@@ -302,23 +399,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
       return idx;
     });
-  }, [watchHistory]);
+  }, [watchHistory, loadStream]);
 
   const playPrev = useCallback(() => {
     setCurrentHistoryIndex((idx) => {
       if (idx > 0) {
         const prev = watchHistory[idx - 1];
         if (prev) {
+          currentVideoRef.current = prev;
           setCurrentVideo(prev);
-          try {
-            playerRef.current?.loadVideoById(getVideoId(prev));
-          } catch (_) {}
+          loadStream(prev);
         }
         return idx - 1;
       }
       return idx;
     });
-  }, [watchHistory]);
+  }, [watchHistory, loadStream]);
 
   const addBookmark = useCallback(
     (videoId: string, time: number, label: string) => {
@@ -356,8 +452,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setPlaybackSpeed,
         currentVideo,
         watchVideo,
-        playerRef,
-        isYTReady,
+        audioRef,
+        streamLoading,
+        streamError,
+        retryStream,
         isPlaying,
         setIsPlaying,
         playerExpanded,
@@ -394,6 +492,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setStudyTimerDuration,
         startStudyTimer,
         stopStudyTimer,
+        pendingResumeTime,
+        saveResumeTimestamp,
+        getResumeTimestamp,
+        autoFullscreen,
+        setAutoFullscreen,
       }}
     >
       {children}

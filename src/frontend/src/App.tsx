@@ -1,7 +1,7 @@
 import { Toaster } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 import { Home, ListMusic, Search, Settings, ZapOff } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { toast } from "sonner";
 import { BottomPlayer } from "./components/BottomPlayer";
 import { ExpandedPlayer } from "./components/ExpandedPlayer";
@@ -13,88 +13,6 @@ import { SearchPage } from "./pages/SearchPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { WatchPage } from "./pages/WatchPage";
 import { getVideoId } from "./types/youtube";
-
-function YouTubeManager() {
-  const {
-    currentVideo,
-    isYTReady,
-    playerRef,
-    setIsPlaying,
-    playbackSpeed,
-    volume,
-    loop,
-    playNext,
-  } = useApp();
-  const lastVideoId = useRef<string | null>(null);
-  const playerCreated = useRef(false);
-
-  useEffect(() => {
-    if (!isYTReady || !currentVideo) return;
-    const videoId = getVideoId(currentVideo);
-    if (!videoId) return;
-
-    if (!playerCreated.current) {
-      playerCreated.current = true;
-      lastVideoId.current = videoId;
-      try {
-        playerRef.current = new window.YT.Player("yt-player", {
-          videoId,
-          width: "100%",
-          height: "100%",
-          playerVars: {
-            autoplay: 1,
-            controls: 0,
-            rel: 0,
-            modestbranding: 1,
-            playsinline: 1,
-            origin: window.location.origin,
-          },
-          events: {
-            onReady: (e) => {
-              e.target.setPlaybackRate(playbackSpeed);
-              e.target.setVolume(volume);
-              setIsPlaying(true);
-            },
-            onStateChange: (e) => {
-              const playing = e.data === window.YT.PlayerState.PLAYING;
-              setIsPlaying(playing);
-              if (e.data === window.YT.PlayerState.ENDED) {
-                if (loop) {
-                  try {
-                    playerRef.current?.seekTo(0, true);
-                    playerRef.current?.playVideo();
-                  } catch (_) {}
-                } else {
-                  playNext();
-                }
-              }
-            },
-          },
-        });
-      } catch (_) {
-        playerCreated.current = false;
-      }
-    } else if (videoId !== lastVideoId.current) {
-      lastVideoId.current = videoId;
-      try {
-        playerRef.current?.loadVideoById(videoId);
-        playerRef.current?.setPlaybackRate(playbackSpeed);
-        setIsPlaying(true);
-      } catch (_) {}
-    }
-  }, [
-    isYTReady,
-    currentVideo,
-    playerRef,
-    setIsPlaying,
-    playbackSpeed,
-    volume,
-    loop,
-    playNext,
-  ]);
-
-  return null;
-}
 
 function PreferenceLoader() {
   const { setAccentColor, setPlaybackSpeed, setPreferencesLoaded } = useApp();
@@ -125,7 +43,7 @@ function AppShell() {
     page,
     setPage,
     currentVideo,
-    playerRef,
+    audioRef,
     setIsPlaying,
     addBookmark,
     loop,
@@ -136,103 +54,82 @@ function AppShell() {
     abLoop,
     playerExpanded,
     setPlayerExpanded,
+    playNext,
+    saveResumeTimestamp,
+    pendingResumeTime,
   } = useApp();
 
   // Keyboard shortcuts
+  // biome-ignore lint/correctness/useExhaustiveDependencies: setIsPlaying and playNext are stable refs, intentionally omitted
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
-      const p = playerRef.current;
+      const audio = audioRef.current;
 
       switch (e.key) {
         case " ":
           e.preventDefault();
-          if (!p) break;
-          try {
-            const state = p.getPlayerState();
-            if (state === window.YT?.PlayerState?.PLAYING) {
-              p.pauseVideo();
-              setIsPlaying(false);
-            } else {
-              p.playVideo();
-              setIsPlaying(true);
-            }
-          } catch (_) {}
+          if (!audio) break;
+          if (!audio.paused) {
+            audio.pause();
+          } else {
+            audio.play().catch(() => {});
+          }
           break;
         case "ArrowLeft":
           e.preventDefault();
-          try {
-            p?.seekTo(Math.max(0, p.getCurrentTime() - 5), true);
-          } catch (_) {}
+          if (audio) audio.currentTime = Math.max(0, audio.currentTime - 5);
           break;
         case "ArrowRight":
           e.preventDefault();
-          try {
-            p?.seekTo(p.getCurrentTime() + 5, true);
-          } catch (_) {}
-          break;
-        case "ArrowUp":
-          e.preventDefault();
-          try {
-            const v = Math.min(100, p?.getVolume() ?? 0 + 10);
-            p?.setVolume(v);
-          } catch (_) {}
-          break;
-        case "ArrowDown":
-          e.preventDefault();
-          try {
-            const v = Math.max(0, p?.getVolume() ?? 100 - 10);
-            p?.setVolume(v);
-          } catch (_) {}
+          if (audio)
+            audio.currentTime = Math.min(
+              audio.duration || 0,
+              audio.currentTime + 5,
+            );
           break;
         case "l":
         case "L":
           setLoop(!loop);
-          toast(loop ? "Loop off" : "Loop on 🔁", { duration: 1500 });
+          toast(loop ? "Loop off" : "Loop on \uD83D\uDD01", { duration: 1500 });
           break;
         case "f":
         case "F":
           setFocusMode(!focusMode);
-          toast(focusMode ? "Focus mode off" : "Focus mode on 🎯", {
+          toast(focusMode ? "Focus mode off" : "Focus mode on \uD83C\uDFAF", {
             duration: 1500,
           });
           break;
         case "m":
         case "M":
-          try {
-            if (p?.isMuted()) p.unMute();
-            else p?.mute();
-          } catch (_) {}
+          if (audio) audio.muted = !audio.muted;
           break;
         case "b":
         case "B":
-          if (currentVideo && p) {
-            const t = p.getCurrentTime();
-            const vid =
-              typeof currentVideo.id === "string"
-                ? currentVideo.id
-                : currentVideo.id.videoId;
+          if (currentVideo && audio) {
+            const t = audio.currentTime;
+            const vid = getVideoId(currentVideo);
             const m = Math.floor(t / 60);
             const s = Math.floor(t % 60);
             addBookmark(vid, t, `${m}:${s.toString().padStart(2, "0")}`);
-            toast.success("Bookmark added 🔖", { duration: 1500 });
+            toast.success("Bookmark added \uD83D\uDD16", { duration: 1500 });
           }
           break;
         case "[":
-          if (p) {
-            const a = p.getCurrentTime();
+          if (audio) {
+            const a = audio.currentTime;
             setAbLoop(
               abLoop
                 ? { ...abLoop, start: a }
-                : { start: a, end: p.getDuration() || a + 30 },
+                : { start: a, end: audio.duration || a + 30 },
             );
             toast("A-point set", { duration: 1500 });
           }
           break;
         case "]":
-          if (p) {
-            const b = p.getCurrentTime();
+          if (audio) {
+            const b = audio.currentTime;
             setAbLoop(abLoop ? { ...abLoop, end: b } : { start: 0, end: b });
             toast("B-point set", { duration: 1500 });
           }
@@ -242,8 +139,7 @@ function AppShell() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [
-    playerRef,
-    setIsPlaying,
+    audioRef,
     loop,
     setLoop,
     focusMode,
@@ -256,6 +152,45 @@ function AppShell() {
 
   return (
     <>
+      {/* Hidden audio element — biome-ignore lint/a11y/useMediaCaption: audio is background music player, captions not applicable */}
+      {/* biome-ignore lint/a11y/useMediaCaption: intentional */}
+      <audio
+        ref={audioRef}
+        style={{ display: "none" }}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
+        onEnded={() => {
+          if (loop && audioRef.current) {
+            audioRef.current.currentTime = 0;
+            audioRef.current.play().catch(() => {});
+          } else {
+            playNext();
+          }
+        }}
+        onCanPlay={() => {
+          const audio = audioRef.current;
+          if (!audio) return;
+          const resumeAt = pendingResumeTime.current;
+          if (resumeAt && resumeAt > 5) {
+            pendingResumeTime.current = null;
+            audio.currentTime = resumeAt;
+            const mins = Math.floor(resumeAt / 60);
+            const secs = Math.floor(resumeAt % 60);
+            toast(`Resumed from ${mins}:${secs.toString().padStart(2, "0")}`, {
+              duration: 2500,
+            });
+          }
+        }}
+        onTimeUpdate={() => {
+          const audio = audioRef.current;
+          if (!audio || !currentVideo) return;
+          const ct = audio.currentTime;
+          if (ct > 5) {
+            saveResumeTimestamp(getVideoId(currentVideo), ct);
+          }
+        }}
+      />
+
       {/* Outer dark gradient bg */}
       <div
         className="fixed inset-0 -z-10"
@@ -401,7 +336,6 @@ function AppShell() {
         </div>
       )}
 
-      <YouTubeManager />
       <PreferenceLoader />
       <Toaster position="top-center" />
     </>

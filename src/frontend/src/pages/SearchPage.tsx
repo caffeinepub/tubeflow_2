@@ -1,11 +1,18 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Clock, RefreshCw, Search, X } from "lucide-react";
+import {
+  AlertCircle,
+  Clock,
+  Loader2,
+  RefreshCw,
+  Search,
+  X,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { VideoCard } from "../components/VideoCard";
 import { useApp } from "../context/AppContext";
-import { invidiousSearch } from "../lib/invidious";
+import { invidiousSearch, invidiousSearchPage } from "../lib/invidious";
 import type { YouTubeVideoItem } from "../types/youtube";
 
 const STORAGE_KEY = "tubeflow_recent_searches";
@@ -34,7 +41,10 @@ export function SearchPage() {
   const [localInput, setLocalInput] = useState(searchQuery);
   const [videos, setVideos] = useState<YouTubeVideoItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [fetched, setFetched] = useState("");
+  const [nextpageToken, setNextpageToken] = useState<string | null>(null);
+  const [searchError, setSearchError] = useState(false);
   const [recentSearches, setRecentSearches] =
     useState<string[]>(getRecentSearches);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -47,13 +57,22 @@ export function SearchPage() {
     const q = localInput.trim();
     if (!q || q === fetched) return;
     setLoading(true);
+    setSearchError(false);
     setFetched(q);
+    setNextpageToken(null);
+    setVideos([]);
     setSearchQuery(q);
     saveSearch(q);
     setRecentSearches(getRecentSearches());
-    // invidiousSearch never rejects — it falls back to curated videos
     invidiousSearch(q)
-      .then(setVideos)
+      .then((result) => {
+        setVideos(result.items);
+        setNextpageToken(result.nextpage);
+      })
+      .catch(() => {
+        setSearchError(true);
+        setVideos([]);
+      })
       .finally(() => setLoading(false));
   }, [localInput, fetched, setSearchQuery]);
 
@@ -62,6 +81,11 @@ export function SearchPage() {
     const q = localInput.trim();
     if (!q) return;
     setFetched(""); // force re-fetch
+  };
+
+  const handleRetry = () => {
+    setSearchError(false);
+    setFetched(""); // triggers re-fetch
   };
 
   const handlePickRecent = (q: string) => {
@@ -74,6 +98,17 @@ export function SearchPage() {
     e.stopPropagation();
     removeSearch(q);
     setRecentSearches(getRecentSearches());
+  };
+
+  const handleLoadMore = () => {
+    if (!nextpageToken || !fetched) return;
+    setLoadingMore(true);
+    invidiousSearchPage(fetched, nextpageToken)
+      .then((result) => {
+        setVideos((prev) => [...prev, ...result.items]);
+        setNextpageToken(result.nextpage);
+      })
+      .finally(() => setLoadingMore(false));
   };
 
   const showRecents = !localInput.trim() && recentSearches.length > 0;
@@ -103,6 +138,8 @@ export function SearchPage() {
                 setLocalInput("");
                 setFetched("");
                 setVideos([]);
+                setNextpageToken(null);
+                setSearchError(false);
               }}
               className="text-muted-foreground hover:text-foreground transition-colors"
               data-ocid="search.close_button"
@@ -179,12 +216,50 @@ export function SearchPage() {
           </div>
         )}
 
+        {/* Error state */}
+        {!loading && searchError && (
+          <div
+            className="flex flex-col items-center justify-center py-16 gap-4"
+            data-ocid="search.error_state"
+          >
+            <div
+              className="w-14 h-14 rounded-full flex items-center justify-center"
+              style={{ background: "oklch(0.18 0.005 260)" }}
+            >
+              <AlertCircle
+                className="w-7 h-7"
+                style={{ color: "oklch(0.65 0.18 25)" }}
+              />
+            </div>
+            <div className="text-center">
+              <p className="text-foreground font-semibold mb-1">
+                Could not connect
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Check your internet or try again.
+              </p>
+            </div>
+            <Button
+              onClick={handleRetry}
+              data-ocid="search.retry.button"
+              className="flex items-center gap-2 text-black font-semibold"
+              style={{ background: "var(--tube-accent)" }}
+            >
+              <RefreshCw className="w-4 h-4" />
+              Retry
+            </Button>
+          </div>
+        )}
+
         {/* Results */}
-        {!loading && videos.length > 0 && (
+        {!loading && !searchError && videos.length > 0 && (
           <>
             <div className="flex items-center justify-between mb-3">
               <p className="text-xs text-muted-foreground">
-                Results for{" "}
+                <span className="font-semibold text-foreground">
+                  {videos.length}
+                </span>{" "}
+                results for{" "}
                 <span
                   className="font-semibold"
                   style={{ color: "var(--tube-accent)" }}
@@ -197,20 +272,53 @@ export function SearchPage() {
                 size="sm"
                 onClick={() => setFetched("")}
                 className="h-7 px-2 text-xs text-muted-foreground"
-                data-ocid="search.retry.button"
+                data-ocid="search.secondary_button"
               >
                 <RefreshCw className="w-3 h-3 mr-1" /> Retry
               </Button>
             </div>
             <div className="grid grid-cols-2 gap-3" data-ocid="search.list">
               {videos.map((v, i) => (
-                <VideoCard key={String(v.id)} video={v} index={i + 1} />
+                <VideoCard
+                  key={`${String(v.id)}-${i}`}
+                  video={v}
+                  index={i + 1}
+                />
               ))}
             </div>
+
+            {/* Load More */}
+            {nextpageToken && (
+              <div className="mt-4">
+                <button
+                  type="button"
+                  data-ocid="search.pagination_next"
+                  onClick={handleLoadMore}
+                  disabled={loadingMore}
+                  className="w-full py-3 rounded-2xl text-sm font-semibold transition-all flex items-center justify-center gap-2"
+                  style={{
+                    background: "oklch(0.18 0.005 260)",
+                    color: loadingMore
+                      ? "oklch(0.45 0.009 240)"
+                      : "var(--tube-accent)",
+                    border: "1px solid oklch(0.22 0.005 260)",
+                  }}
+                >
+                  {loadingMore ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Loading more...
+                    </>
+                  ) : (
+                    "Load More Results"
+                  )}
+                </button>
+              </div>
+            )}
           </>
         )}
 
-        {!loading && fetched && videos.length === 0 && (
+        {!loading && !searchError && fetched && videos.length === 0 && (
           <div
             className="text-center py-12 text-muted-foreground text-sm"
             data-ocid="search.empty_state"

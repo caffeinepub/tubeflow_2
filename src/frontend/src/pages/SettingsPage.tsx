@@ -12,6 +12,7 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  Tv,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -27,7 +28,7 @@ const ACCENT_PRESETS = [
   { label: "Pink", value: "#EC4899" },
   { label: "Cyan", value: "#06B6D4" },
 ];
-const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4];
 const SHORTCUTS = [
   { key: "Space", desc: "Play / Pause" },
   { key: "← / →", desc: "Seek -5s / +5s" },
@@ -63,6 +64,8 @@ export function SettingsPage() {
     setStudyTimerDuration,
     sleepTimerMinutes,
     setSleepTimer,
+    autoFullscreen,
+    setAutoFullscreen,
   } = useApp();
   const [localAccent, setLocalAccent] = useState(accentColor);
   const [localSpeed, setLocalSpeed] = useState(playbackSpeed);
@@ -194,6 +197,50 @@ export function SettingsPage() {
                 {s}x
               </button>
             ))}
+          </div>
+        </section>
+
+        <Separator />
+
+        {/* Playback Behavior */}
+        <section>
+          <SectionHeader icon={Tv} title="Playback Behavior" />
+          <div
+            className="rounded-2xl p-4"
+            style={{ background: "oklch(0.15 0.005 260)" }}
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-foreground font-medium">
+                  Auto Fullscreen on Play
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Enter fullscreen when you tap Play
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  data-ocid="settings.autofullscreen.toggle"
+                  onClick={() => setAutoFullscreen(!autoFullscreen)}
+                  className="px-3 py-1.5 rounded-full text-xs font-semibold border transition-all"
+                  style={
+                    autoFullscreen
+                      ? {
+                          background: "var(--tube-accent)",
+                          borderColor: "var(--tube-accent)",
+                          color: "black",
+                        }
+                      : {
+                          borderColor: "oklch(0.22 0.005 260)",
+                          color: "oklch(0.65 0.009 240)",
+                        }
+                  }
+                >
+                  {autoFullscreen ? "On" : "Off"}
+                </button>
+              </div>
+            </div>
           </div>
         </section>
 

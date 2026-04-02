@@ -18,7 +18,7 @@ export function WatchPage() {
     focusMode,
     bookmarks,
     removeBookmark,
-    playerRef,
+    audioRef,
     setPlayerExpanded,
   } = useApp();
   const [related, setRelated] = useState<YouTubeVideoItem[]>([]);
@@ -32,7 +32,9 @@ export function WatchPage() {
       currentVideo.snippet.channelTitle || currentVideo.snippet.title;
     invidiousSearch(query)
       .then((results) =>
-        setRelated(results.filter((v) => getVideoId(v) !== vid).slice(0, 10)),
+        setRelated(
+          results.items.filter((v) => getVideoId(v) !== vid).slice(0, 10),
+        ),
       )
       .catch(() => {})
       .finally(() => setLoadingRelated(false));
@@ -142,7 +144,9 @@ export function WatchPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    playerRef.current?.seekTo(bk.time, true);
+                    if (audioRef.current) {
+                      audioRef.current.currentTime = bk.time;
+                    }
                     setPlayerExpanded(true);
                   }}
                   className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-colors"

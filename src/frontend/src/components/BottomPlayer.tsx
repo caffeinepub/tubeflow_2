@@ -7,7 +7,7 @@ import { getThumbnail } from "../types/youtube";
 export function BottomPlayer() {
   const {
     currentVideo,
-    playerRef,
+    audioRef,
     isPlaying,
     setIsPlaying,
     playNext,
@@ -19,28 +19,26 @@ export function BottomPlayer() {
   useEffect(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
     intervalRef.current = setInterval(() => {
-      const p = playerRef.current;
-      if (!p) return;
-      try {
-        const ct = p.getCurrentTime();
-        const dur = p.getDuration();
-        if (Number.isFinite(ct) && dur > 0) setProgress((ct / dur) * 100);
-      } catch (_) {}
+      const audio = audioRef.current;
+      if (!audio) return;
+      const ct = audio.currentTime;
+      const dur = audio.duration;
+      if (Number.isFinite(ct) && dur > 0) setProgress((ct / dur) * 100);
     }, 500);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [playerRef]);
+  }, [audioRef]);
 
   const handlePlayPause = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const p = playerRef.current;
-    if (!p) return;
+    const audio = audioRef.current;
+    if (!audio) return;
     if (isPlaying) {
-      p.pauseVideo();
+      audio.pause();
       setIsPlaying(false);
     } else {
-      p.playVideo();
+      audio.play().catch(() => {});
       setIsPlaying(true);
     }
   };

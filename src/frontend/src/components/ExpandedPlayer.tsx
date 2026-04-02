@@ -3,6 +3,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import {
+  AlertCircle,
   Bookmark,
   BookmarkPlus,
   ChevronDown,
@@ -10,6 +11,7 @@ import {
   Gauge,
   Headphones,
   ListEnd,
+  Loader2,
   Maximize2,
   Minimize2,
   Moon,
@@ -24,13 +26,15 @@ import {
   Volume2,
   VolumeX,
   X,
+  Zap,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useApp } from "../context/AppContext";
+import { fetchCaptionGaps } from "../lib/invidious";
 import { formatSeconds, formatTimeAgo, formatViews } from "../types/youtube";
 
-const DEFAULT_SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+const QUICK_SPEEDS = [1, 1.5, 2, 3, 4];
 const SLEEP_OPTIONS = [
   { label: "Off", value: null },
   { label: "15 min", value: 15 },
@@ -48,7 +52,10 @@ interface Props {
 export function ExpandedPlayer({ onClose }: Props) {
   const {
     currentVideo,
-    playerRef,
+    audioRef,
+    streamLoading,
+    streamError,
+    retryStream,
     isPlaying,
     setIsPlaying,
     playNext,
@@ -78,6 +85,8 @@ export function ExpandedPlayer({ onClose }: Props) {
     stopStudyTimer,
     studyTimerDuration,
     setStudyTimerDuration,
+    autoFullscreen,
+    saveResumeTimestamp,
   } = useApp();
 
   const [currentTime, setCurrentTime] = useState(0);
@@ -85,95 +94,151 @@ export function ExpandedPlayer({ onClose }: Props) {
   const [isMuted, setIsMuted] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [showStudyTimer, setShowStudyTimer] = useState(false);
-  const [availableSpeeds, setAvailableSpeeds] =
-    useState<number[]>(DEFAULT_SPEEDS);
   const [rotation, setRotation] = useState<Rotation>(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [audioMode, setAudioMode] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [silenceSkip, setSilenceSkip] = useState(false);
   const playerWrapperRef = useRef<HTMLDivElement>(null);
+  const silenceGapsRef = useRef<Array<{ start: number; end: number }>>([]);
+  const silenceIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
+    null,
+  );
+  const saveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastVideoIdRef = useRef<string>("");
+
+  const currentVideoId = currentVideo
+    ? typeof currentVideo.id === "string"
+      ? currentVideo.id
+      : currentVideo.id.videoId
+    : "";
+
+  // Reset per-video state when video changes
+  useEffect(() => {
+    if (currentVideoId && currentVideoId !== lastVideoIdRef.current) {
+      lastVideoIdRef.current = currentVideoId;
+      silenceGapsRef.current = [];
+      setCurrentTime(0);
+      setDuration(0);
+    }
+  }, [currentVideoId]);
+
+  // Sync currentTime and duration from audio element
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const onTimeUpdate = () => {
+      if (!isDragging) setCurrentTime(audio.currentTime);
+      if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        setDuration(audio.duration);
+      }
+      // A-B loop check
+      if (
+        abLoop &&
+        Number.isFinite(audio.currentTime) &&
+        audio.currentTime >= abLoop.end
+      ) {
+        audio.currentTime = abLoop.start;
+      }
+    };
+
+    const onLoadedMetadata = () => {
+      if (Number.isFinite(audio.duration)) setDuration(audio.duration);
+    };
+
+    audio.addEventListener("timeupdate", onTimeUpdate);
+    audio.addEventListener("loadedmetadata", onLoadedMetadata);
+    return () => {
+      audio.removeEventListener("timeupdate", onTimeUpdate);
+      audio.removeEventListener("loadedmetadata", onLoadedMetadata);
+    };
+  }, [audioRef, isDragging, abLoop]);
+
+  // Save timestamp every 5 seconds while playing
+  useEffect(() => {
+    if (saveIntervalRef.current) clearInterval(saveIntervalRef.current);
+    if (!isPlaying || !currentVideoId) return;
+    saveIntervalRef.current = setInterval(() => {
+      const audio = audioRef.current;
+      if (audio && audio.currentTime > 5) {
+        saveResumeTimestamp(currentVideoId, audio.currentTime);
+      }
+    }, 5000);
+    return () => {
+      if (saveIntervalRef.current) clearInterval(saveIntervalRef.current);
+    };
+  }, [isPlaying, currentVideoId, audioRef, saveResumeTimestamp]);
+
+  // Silence skip: fetch gaps when toggled on
+  useEffect(() => {
+    if (!silenceSkip || !currentVideoId) return;
+    silenceGapsRef.current = [];
+    fetchCaptionGaps(currentVideoId).then((gaps) => {
+      silenceGapsRef.current = gaps;
+    });
+  }, [silenceSkip, currentVideoId]);
+
+  // Silence skip polling
+  useEffect(() => {
+    if (silenceIntervalRef.current) clearInterval(silenceIntervalRef.current);
+    if (!silenceSkip) return;
+    silenceIntervalRef.current = setInterval(() => {
+      const audio = audioRef.current;
+      if (!audio) return;
+      const ct = audio.currentTime;
+      for (const gap of silenceGapsRef.current) {
+        if (ct >= gap.start - 0.5 && ct < gap.end) {
+          audio.currentTime = gap.end + 0.5;
+          break;
+        }
+      }
+    }, 800);
+    return () => {
+      if (silenceIntervalRef.current) clearInterval(silenceIntervalRef.current);
+    };
+  }, [silenceSkip, audioRef]);
 
   // Fullscreen change listener
   useEffect(() => {
-    const handler = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
+    const handler = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener("fullscreenchange", handler);
     return () => document.removeEventListener("fullscreenchange", handler);
   }, []);
 
-  useEffect(() => {
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    intervalRef.current = setInterval(() => {
-      const p = playerRef.current;
-      if (!p) return;
-      try {
-        const ct = p.getCurrentTime();
-        const dur = p.getDuration();
-        if (Number.isFinite(ct) && ct >= 0 && !isDragging) setCurrentTime(ct);
-        if (Number.isFinite(dur) && dur > 0) setDuration(dur);
-        // Fetch available playback rates once player is ready
-        try {
-          const rates = p.getAvailablePlaybackRates?.();
-          if (rates && rates.length > 0) {
-            setAvailableSpeeds(rates);
-          }
-        } catch (_) {}
-        // A-B loop check
-        if (abLoop && Number.isFinite(ct) && ct >= abLoop.end) {
-          p.seekTo(abLoop.start, true);
-        }
-        // Loop end check
-        try {
-          const state = p.getPlayerState();
-          if (loop && state === window.YT?.PlayerState?.ENDED) {
-            p.seekTo(0, true);
-            p.playVideo();
-          }
-        } catch (_) {}
-      } catch (_) {}
-    }, 300);
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [playerRef, isDragging, abLoop, loop]);
-
   const handlePlayPause = () => {
-    const p = playerRef.current;
-    if (!p) return;
+    const audio = audioRef.current;
+    if (!audio) return;
     if (isPlaying) {
-      p.pauseVideo();
+      audio.pause();
       setIsPlaying(false);
     } else {
-      p.playVideo();
+      audio.play().catch(() => {});
       setIsPlaying(true);
+      if (autoFullscreen) {
+        playerWrapperRef.current?.requestFullscreen?.().catch(() => {});
+      }
     }
   };
 
   const handleSeek = (vals: number[]) => {
     const val = vals[0] ?? 0;
-    playerRef.current?.seekTo(val, true);
+    if (audioRef.current) audioRef.current.currentTime = val;
     setCurrentTime(val);
   };
 
   const handleSeekRel = (delta: number) => {
-    const p = playerRef.current;
-    if (!p) return;
+    const audio = audioRef.current;
+    if (!audio) return;
     const t = Math.max(0, Math.min(duration, currentTime + delta));
-    p.seekTo(t, true);
+    audio.currentTime = t;
     setCurrentTime(t);
   };
 
   const handleMute = () => {
-    const p = playerRef.current;
-    if (!p) return;
-    if (isMuted) {
-      p.unMute();
-      setIsMuted(false);
-    } else {
-      p.mute();
-      setIsMuted(true);
-    }
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.muted = !audio.muted;
+    setIsMuted(audio.muted);
   };
 
   const handleSetA = () => {
@@ -212,13 +277,11 @@ export function ExpandedPlayer({ onClose }: Props) {
     }
   };
 
-  const pct = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const handleSetSpeed = (s: number) => {
+    setPlaybackSpeed(s);
+  };
 
-  const currentVideoId = currentVideo
-    ? typeof currentVideo.id === "string"
-      ? currentVideo.id
-      : currentVideo.id.videoId
-    : "";
+  const pct = duration > 0 ? (currentTime / duration) * 100 : 0;
   const videoBookmarks = bookmarks.filter((b) => b.videoId === currentVideoId);
 
   const fmtTimer = (s: number) => {
@@ -227,9 +290,11 @@ export function ExpandedPlayer({ onClose }: Props) {
     return `${m}:${sec.toString().padStart(2, "0")}`;
   };
 
-  // Rotation style helpers
-  const needsSwap = rotation === 90 || rotation === 270;
-  const thumbnailUrl = currentVideo?.snippet?.thumbnails?.high?.url;
+  const thumbnailUrl =
+    currentVideo?.snippet?.thumbnails?.maxres?.url ||
+    currentVideo?.snippet?.thumbnails?.high?.url ||
+    currentVideo?.snippet?.thumbnails?.medium?.url ||
+    "";
 
   if (!currentVideo) return null;
 
@@ -259,7 +324,6 @@ export function ExpandedPlayer({ onClose }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* Fullscreen button */}
           <button
             type="button"
             data-ocid="player.fullscreen.button"
@@ -272,15 +336,11 @@ export function ExpandedPlayer({ onClose }: Props) {
             }}
           >
             {isFullscreen ? (
-              <Minimize2
-                className="w-4 h-4"
-                style={{ color: isFullscreen ? "black" : undefined }}
-              />
+              <Minimize2 className="w-4 h-4" style={{ color: "black" }} />
             ) : (
               <Maximize2 className="w-4 h-4 text-muted-foreground" />
             )}
           </button>
-          {/* Study timer button */}
           <button
             type="button"
             data-ocid="player.study_timer.button"
@@ -309,70 +369,133 @@ export function ExpandedPlayer({ onClose }: Props) {
 
       {/* Scrollable content */}
       <div className="flex-1 overflow-y-auto px-5 pb-6">
-        {/* YT Player embed with rotation */}
+        {/* Album art / thumbnail area */}
         <div
-          className="w-full rounded-2xl overflow-hidden bg-black mb-3"
-          style={{ aspectRatio: "16/9", position: "relative" }}
+          ref={playerWrapperRef}
+          className="w-full rounded-2xl overflow-hidden bg-black mb-3 relative"
+          style={{ aspectRatio: "16/9" }}
         >
-          <div
-            ref={playerWrapperRef}
-            style={{
-              width: "100%",
-              height: "100%",
-              transform: `rotate(${rotation}deg)`,
-              transition: "transform 0.3s ease",
-              transformOrigin: "center center",
-              ...(needsSwap
-                ? {
-                    position: "absolute",
-                    top: "50%",
-                    left: "50%",
-                    translate: "-50% -50%",
-                    width: "56.25%",
-                    height: "177.78%",
-                  }
-                : {}),
-            }}
-          >
-            <div id="yt-player" style={{ width: "100%", height: "100%" }} />
-            {/* Audio mode overlay */}
-            {audioMode && (
-              <div
-                className="absolute inset-0 flex flex-col items-center justify-center gap-3"
-                style={{ background: "oklch(0.09 0.006 260 / 0.97)" }}
-              >
-                {thumbnailUrl && (
-                  <img
-                    src={thumbnailUrl}
-                    alt="thumb"
-                    className="w-24 h-24 rounded-xl object-cover opacity-60"
-                  />
-                )}
-                <p className="text-xs text-muted-foreground px-4 text-center">
-                  {currentVideo.snippet.channelTitle}
-                </p>
-                <p className="text-sm font-semibold text-foreground px-4 text-center line-clamp-2">
-                  {currentVideo.snippet.title}
-                </p>
-                {/* Audio wave animation */}
-                <div className="audio-wave">
-                  {[1, 2, 3, 4, 5].map((i) => (
-                    <span
-                      key={i}
-                      className="audio-bar"
-                      style={{ animationDelay: `${(i - 1) * 0.12}s` }}
+          {thumbnailUrl ? (
+            <img
+              src={thumbnailUrl}
+              alt={currentVideo.snippet.title}
+              className="w-full h-full object-cover"
+              style={{
+                filter: isPlaying ? "none" : "brightness(0.6)",
+                transform: `rotate(${rotation}deg)`,
+                transition: "transform 0.3s ease, filter 0.3s ease",
+              }}
+            />
+          ) : (
+            <div
+              className="w-full h-full"
+              style={{
+                background:
+                  "linear-gradient(135deg, oklch(0.15 0.01 260) 0%, oklch(0.20 0.015 290) 100%)",
+              }}
+            />
+          )}
+
+          {/* Audio mode overlay or equalizer */}
+          {(isPlaying || audioMode) && (
+            <div
+              className="absolute inset-0 flex items-end justify-center pb-4"
+              style={{
+                background:
+                  isPlaying && !audioMode
+                    ? "oklch(0.09 0.006 260 / 0.3)"
+                    : "oklch(0.09 0.006 260 / 0.75)",
+              }}
+            >
+              {audioMode && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+                  {thumbnailUrl && (
+                    <img
+                      src={thumbnailUrl}
+                      alt="thumb"
+                      className="w-24 h-24 rounded-xl object-cover opacity-60"
                     />
-                  ))}
+                  )}
+                  <p className="text-xs text-muted-foreground px-4 text-center">
+                    {currentVideo.snippet.channelTitle}
+                  </p>
+                  <p className="text-sm font-semibold text-foreground px-4 text-center line-clamp-2">
+                    {currentVideo.snippet.title}
+                  </p>
                 </div>
+              )}
+              {/* Equalizer bars */}
+              <div className="audio-wave">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <span
+                    key={i}
+                    className="audio-bar"
+                    style={{
+                      animationDelay: `${(i - 1) * 0.12}s`,
+                      animationPlayState: isPlaying ? "running" : "paused",
+                    }}
+                  />
+                ))}
               </div>
-            )}
-          </div>
+            </div>
+          )}
+
+          {/* Stream loading overlay */}
+          {streamLoading && (
+            <div
+              className="absolute inset-0 flex items-center justify-center"
+              style={{ background: "oklch(0.09 0.006 260 / 0.85)" }}
+              data-ocid="player.loading_state"
+            >
+              <div className="flex flex-col items-center gap-3">
+                <Loader2
+                  className="w-8 h-8 animate-spin"
+                  style={{ color: "var(--tube-accent)" }}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Loading audio...
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Stream error overlay */}
+          {streamError && !streamLoading && (
+            <div
+              className="absolute inset-0 flex items-center justify-center"
+              style={{ background: "oklch(0.09 0.006 260 / 0.92)" }}
+              data-ocid="player.error_state"
+            >
+              <div className="flex flex-col items-center gap-3 px-6 text-center">
+                <AlertCircle
+                  className="w-8 h-8"
+                  style={{ color: "oklch(0.65 0.18 25)" }}
+                />
+                <p className="text-sm text-foreground font-semibold">
+                  Could not connect
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Check your internet or try again.
+                </p>
+                <button
+                  type="button"
+                  data-ocid="player.retry.button"
+                  onClick={retryStream}
+                  className="flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold text-black"
+                  style={{ background: "var(--tube-accent)" }}
+                >
+                  <RefreshCw className="w-4 h-4" />
+                  Retry
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Rotation controls */}
         <div className="mb-3">
           <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
-            <RotateCw className="w-3 h-3" /> Rotate Video
+            <RotateCw className="w-3 h-3" /> Rotate
           </p>
           <div className="flex items-center gap-2">
             {ROTATION_OPTIONS.map((r) => (
@@ -548,16 +671,37 @@ export function ExpandedPlayer({ onClose }: Props) {
 
         {/* Speed pills */}
         <div className="mb-4">
-          <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
-            <Gauge className="w-3 h-3" /> Playback Speed
-          </p>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs text-muted-foreground flex items-center gap-1">
+              <Gauge className="w-3 h-3" /> Playback Speed
+            </p>
+            <button
+              type="button"
+              data-ocid="player.silence_skip.toggle"
+              onClick={() => setSilenceSkip((v) => !v)}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border transition-all"
+              style={{
+                background: silenceSkip
+                  ? "var(--tube-accent)"
+                  : "oklch(0.19 0.005 260)",
+                borderColor: silenceSkip
+                  ? "var(--tube-accent)"
+                  : "oklch(0.24 0.005 260)",
+                color: silenceSkip ? "black" : "oklch(0.6 0.009 240)",
+              }}
+              title="Skip Silence (uses captions)"
+            >
+              <Zap className="w-3 h-3" />
+              Skip Silence
+            </button>
+          </div>
           <div className="speed-scroll" data-ocid="player.speed.select">
-            {availableSpeeds.map((s) => (
+            {QUICK_SPEEDS.map((s) => (
               <button
                 key={s}
                 type="button"
                 data-ocid="player.speed.toggle"
-                onClick={() => setPlaybackSpeed(s)}
+                onClick={() => handleSetSpeed(s)}
                 className={cn(
                   "px-3 py-1.5 rounded-full text-xs font-semibold flex-shrink-0 transition-all border",
                   playbackSpeed === s
@@ -608,7 +752,6 @@ export function ExpandedPlayer({ onClose }: Props) {
           <span className="text-xs text-muted-foreground w-7 text-right tabular-nums">
             {isMuted ? 0 : volume}%
           </span>
-          {/* Audio mode toggle */}
           <button
             type="button"
             data-ocid="player.audiomode.toggle"
@@ -628,7 +771,7 @@ export function ExpandedPlayer({ onClose }: Props) {
           </button>
         </div>
 
-        {/* ── Student Tools ── */}
+        {/* Student Tools */}
         <div
           className="rounded-2xl p-4 mb-4 space-y-4"
           style={{ background: "oklch(0.14 0.005 260)" }}
@@ -741,7 +884,9 @@ export function ExpandedPlayer({ onClose }: Props) {
                     <button
                       type="button"
                       onClick={() => {
-                        playerRef.current?.seekTo(bk.time, true);
+                        if (audioRef.current) {
+                          audioRef.current.currentTime = bk.time;
+                        }
                         setCurrentTime(bk.time);
                       }}
                       className="flex-1 flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-left transition-colors hover:bg-secondary"
