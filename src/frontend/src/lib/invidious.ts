@@ -11,8 +11,13 @@ export const PIPED_INSTANCES = [
   "https://pipedapi.reallyaweso.me",
   "https://piped.adminforge.de",
   "https://api.piped.projectsegfau.lt",
-  "https://piped.video",
   "https://pipedapi.coldmilk.com",
+  "https://pipedapi.tokhmi.xyz",
+  "https://pipedapi.moomoo.me",
+  "https://piped-api.privacy.com.de",
+  "https://api.piped.yt",
+  "https://piped.privacydev.net",
+  "https://pipedapi.rivo.sh",
 ];
 
 // Invidious instances — fallback for captions
@@ -162,19 +167,40 @@ async function raceInstances<T>(
   buildPath: (base: string) => string,
   parseResponse: (json: unknown) => T | null,
 ): Promise<T> {
-  const attempts = instances.map((base) =>
-    fetchWithTimeout(buildPath(base))
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((json) => {
-        const result = parseResponse(json);
-        if (!result) throw new Error("Empty or invalid response");
-        return result;
-      }),
-  );
-  return Promise.any(attempts);
+  const makeAttempts = (proxyPrefix: string) =>
+    instances.map((base) =>
+      fetchWithTimeout(proxyPrefix + buildPath(base))
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then((json) => {
+          const result = parseResponse(json);
+          if (!result) throw new Error("Empty or invalid response");
+          return result;
+        }),
+    );
+
+  // First try: direct requests
+  try {
+    return await Promise.any(makeAttempts(""));
+  } catch {
+    // Second try: via CORS proxy
+    const proxy = "https://corsproxy.io/?";
+    const proxied = instances.map((base) =>
+      fetchWithTimeout(proxy + encodeURIComponent(buildPath(base)))
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then((json) => {
+          const result = parseResponse(json);
+          if (!result) throw new Error("Empty or invalid response");
+          return result;
+        }),
+    );
+    return await Promise.any(proxied);
+  }
 }
 
 export interface SearchResult {
@@ -227,7 +253,27 @@ export async function invidiousSearchPage(
 
 /** Fetch audio stream URL for a video ID by racing all Piped instances */
 export async function fetchStreamUrl(videoId: string): Promise<string> {
-  const attempts = PIPED_INSTANCES.map((base) =>
+  const makeAttempts = (proxyPrefix: string) =>
+    PIPED_INSTANCES.map((base) =>
+      Promise.race([
+        fetch(proxyPrefix + encodeURIComponent(`${base}/streams/${videoId}`))
+          .then((res) => {
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return res.json() as Promise<PipedStreamsResponse>;
+          })
+          .then((data) => {
+            const url = data?.audioStreams?.[0]?.url;
+            if (!url) throw new Error("No audio stream");
+            return url;
+          }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), 8000),
+        ),
+      ]),
+    );
+
+  // Direct fetch (no proxy prefix means no encoding needed)
+  const directAttempts = PIPED_INSTANCES.map((base) =>
     Promise.race([
       fetch(`${base}/streams/${videoId}`)
         .then((res) => {
@@ -244,7 +290,13 @@ export async function fetchStreamUrl(videoId: string): Promise<string> {
       ),
     ]),
   );
-  return Promise.any(attempts);
+
+  try {
+    return await Promise.any(directAttempts);
+  } catch {
+    const proxy = "https://corsproxy.io/?";
+    return Promise.any(makeAttempts(proxy));
+  }
 }
 
 export async function invidiousTrending(
